@@ -45,6 +45,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <regex.h>
+#include <errno.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -63,8 +65,33 @@
 #define  ELISTEN		  11
 #define  EEOF	      13 // At end of file, cant read any line
 #define  ESOCKETREAD	  17 // Could not read from socket after repeated attempts
+#define  EINVALID_REQUEST 19 // Request was malformed
+#define
 
-typedef enum rMethod {GET, POST, head} rMethod_e;
+#define	METHOD_REGEX "^GET"
+#define	URI_REGEX RELURI
+
+/* These are not #define because # cannot go in macro's*/
+#define CTL			 "[[:cntrl:]]"
+#define HEX			 "[A-Fa-f[:digit:]]"
+#define SAFE			 "[$-_.]";
+#define EXTRA		 "[!*'(),]"
+#define NATIONAL      "[][{}|\^~`]"
+#define ESCAPE		 "(%"##HEX##"{2})"
+#define UNRESERVED	 "[[:alpha:][:digit:]"##SAFE##EXTRA##NATIONAL##"]";
+#define UCHAR 		 "["##UNRESERVED##ESCAPE##"]"
+#define PCHAR		 "[:@+=&"##UCHAR##"]"
+#define SEGMENT 		 PCHAR##"*"
+#define FSEGMENT		 PCHAR##"+"
+#define PATH			 FSEGMENT##"(/"##SEGMENT##")*"
+#define PARAM		 "("##PCHAR##"|/)*"
+#define PARAMS		 PARAM##"(;"##PARAM##")*"
+#define RELPATH		 PATH##"?(;"##PARAMS##")?"##QUERY##"?"
+#define ABSPATH		 "/"##RELPATH
+#define RELURI	     ABSPATH ## "|" ## RELPATH
+
+
+typedef enum rMethod {GET, POST, HEAD} rMethod_e;
 
 typedef struct generalHeader {
 	char* date;
@@ -253,6 +280,8 @@ fdReadLine(int fd) {
 	 * 					A pseudo line is a string that was preceeded by a newline,
 	 * 					but followed with an EOF instead of a newline.
 	 *
+	 * 					This return string should be free'd by the caller
+	 *
 	 * NOTE:
 	 * 		Once called, this function will be locked to the given file
 	 * 		descriptor untill it closes. That is, if it is subsequently called
@@ -267,18 +296,19 @@ fdReadLine(int fd) {
 
 	int nLine,leftoverLength, newlineBufferOffset=0, usedLeftover=0;
 	int lineSizeGrowth, splitIndex;
-	int lineSize=1; 						// Always space for a null byte
+	int lineSize=0;
 	int readFailed=0, readAttempted=0;
 
 	/* Buffer leftover tracking */
-	static char *leftover; 					// Buffer lefover
+	static char *leftover; 					// Buffer lefover, not '\0' terminated
 	static int leftoverSize;
 	static int lastFd=NULL;
 	static int fdHasClosed=0;
 
+	/* Holds the line, includes the final '\n' & appended with '\0' on return */
+	char *line=NULL;
 	char* newLineLocation=NULL;				// Location of newline in buffer
-	char *line=NULL; 						// This holds our line
-	char buffer[1+RECVBUFFER_SIZE];
+	char buffer[RECVBUFFER_SIZE];
 	ssize_t bytesRead;
 
 	/* Lock function to fd */
@@ -292,22 +322,28 @@ fdReadLine(int fd) {
 		leftoverSize=0;
 	}
 
-	/* Return non newline terminated leftover if fd has closed */
 	if(fdHasClosed){
 		char* newLineLocation=strnchr(leftover, '\n',leftoverSize);
 
 		/* line is initially what is in leftover */
 		line=malloc(leftoverSize+1);
-		strncpy(line, leftover,leftoverSize);
-		line[leftoverSize]='\0';
 
-		/* Leftover has no newline in it - return the leftover */
+		/* Line just a null byte if leftover has nothing inside it */
+		if(lineSize>0){
+			strncpy(line, leftover, leftoverSize);
+		}
+
+		/* Return non newline terminated leftover if fd has closed */
 		if (newLineLocation==NULL){
+			line[leftoverSize]='\0'; // Null terminate the line
 			unlock();
+
+		/* Leftover has newline in it - split and return line */
 		} else {
 			splitIndex=newLineLocation-leftover;
 			extractLineCacheLeftover(&line, splitIndex, leftoverSize);
 		}
+
 		return(line);
 	}
 
@@ -318,7 +354,6 @@ fdReadLine(int fd) {
 		usedLeftover=0;
 		if (leftover!=NULL) {
 
-			/* Leftover has a null byte */
 			strncpy(buffer, leftover, leftoverSize);
 			bytesRead = leftoverSize;
 			usedLeftover = 1;
@@ -332,7 +367,6 @@ fdReadLine(int fd) {
 		} else {
 
 			bytesRead = read(fd, buffer, (RECVBUFFER_SIZE));
-			readAttempted=1;
 
 			// Retry if an error occured on reading, shortcircuit if EOF
 			if(bytesRead<=0){
@@ -340,12 +374,13 @@ fdReadLine(int fd) {
 				continue;
 			}
 		}
-		buffer[bytesRead]='\0';
-		newLineLocation = strchr(buffer, '\n');
+
+		/* Scan bufer for newline, ignoring null bytes */
+		newLineLocation = memchr(buffer, '\n', bytesRead);
 
 		/* Increse line size, and copy buffered data into line*/
 		line = realloc(line, (lineSize+bytesRead));
-		strcpy(line[lineSize-1], buffer); // Overwrite old '\0'
+		strncpy(line[lineSize], buffer, bytesRead); /* Ignore null bytes, whole buffer*/
 		lineSize+=bytesRead;
 
 	} while (newLineLocation == NULL && ((bytesRead==RECVBUFFER_SIZE)
@@ -368,19 +403,22 @@ fdReadLine(int fd) {
 		extractLineCacheLeftover(line, lineSize-leftoverSize-1, lineSize);
 
 		/* Bytes were read (>0 since nl found) and EOF encountered */
-		if (bytesRead<RECVBUFFER_SIZE) {
+		if ((bytesRead<RECVBUFFER_SIZE) && !(usedLeftover)){
 			fdHasClosed=1;
 		}
 
 		return(line);
 	}
 
-	/* Hereon, a newline was not found, but a read was attempted */
+	/* INVARIANT: A newline was not found, but a read was attempted & returned
+	 * less than the number of bytes in our buffer and hence has reached EOF */
 
-	// Put line into the leftover - leave off the null byte
+	// Put any remainder into the leftover (leave off the null byte)
 	fdHasClosed=1;
-	realloc(leftover, lineSize-1); // free leftover if nothing leftover
-	strncpy(leftover, line, lineSize-1);
+	if(lineSize>0){
+		leftover=malloc(lineSize); // free leftover if nothing leftover
+		strncpy(leftover, line, lineSize);
+	}
 	return(NULL); // If the function is called again, the leftover will be returned.
 
 	// Read suceeded. EOF found y/n
@@ -396,7 +434,9 @@ fdReadLine(int fd) {
 		 * 		int length	- the string length
 		 *
 		 * 	RETURN:
-		 * 		Mutate string, leftover, leftoverSize
+		 * 		Mutate line, leftover, leftoverSize
+		 *
+		 * 		Line is always null terminated, and includes the '\n' char
 		 *
 		 * 	NOTE:
 		 * 		Leftover saved as is, with no null byte.
@@ -409,19 +449,66 @@ fdReadLine(int fd) {
 			strncpy(leftover, line[nLine+1], leftoverSize);
 		}
 
-		/* Shrink line */
-		*line = realloc(*line, (nLine+1));
-		(*line)[nLine]='\0'; // Overwrite with null byte
+		/* Shrink line, leave space for '\n\0'*/
+		*line = realloc(*line, (nLine+1+1));
+		(*line)[nLine+1]='\0';
 	}
 }
 
-request_t readRequest(int socketFd) {
+request_t
+*readRequest(int socketFd) {
 	/**
 	 * Read a request from a connected socket & return a request structure
 	 */
-	char recieveBuffer[RECVBUFFER_SIZE];
+	request_t r;
+	char* requestLine = fdReadLine(socketFd);
+
+	if(requestLine==NULL){
+		notifyInvalidRequest();
+	}
+
+	parseRequestLine(requestLine, &r);
+	return(&r);
+}
 
 
+void
+notifyInvalidRequest() {
+	log("Request invalid.");
+	exit(EINVALID_REQUEST);
+}
+
+void
+log(char* m) {
+	printf("%s\n",m);
+}
+
+void
+parseRequestLine(char* requestLine, request_t *r) {
+	/**
+	 * Load http1.0 request line into request structure
+	 */
+	regex_t rx;
+	regmatch_t match;
+	int nChar;
+
+	/* Extract method */
+	regcomp(rx, METHOD_REGEX, 0);
+	regexec(rx,requestLine, 1, &match, 0);
+	nChar = match.rm_eo-match.rm_eo;
+	r->method=malloc(nChar);
+	strncpy(r->method,requestLine+match.rm_so,nChar);
+	regfree(rx);
+
+	printf("%s\n",RELURI);
+
+	/* Extract request URI */
+	regcomp(rx, RELURI, 0);
+	regexec(rx,requestLine+(match.rm_eo+1), 1, &match, 0);
+	nChar = match.rm_eo-match.rm_eo;
+	r->uri=malloc(nChar);
+	strncpy(r->method,requestLine+match.rm_so,nChar);
+	regfree(rx);
 
 }
 

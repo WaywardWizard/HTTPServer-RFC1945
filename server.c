@@ -51,10 +51,9 @@
 #include <netinet/in.h>
 #include <pthread.h> /* -l pthread when compiling */
 
-#define MAX_BACKLOG  1024
-
-#define   SENDBUFFER_SIZE  4096
+#define MAX_BACKLOG  1024				// Max listen backlog
 #define   RECVBUFFER_SIZE  4096
+#define	 MAX_READATTEMPT  5				// Max consecutive read failures allowed
 
 #define true  1
 #define false 0
@@ -63,6 +62,7 @@
 #define 	EUSAGE 		  5
 #define  ELISTEN		  11
 #define  EEOF	      13 // At end of file, cant read any line
+#define  ESOCKETREAD	  17 // Could not read from socket after repeated attempts
 
 typedef enum rMethod {GET, POST, head} rMethod_e;
 
@@ -244,15 +244,14 @@ fdReadLine(int fd) {
 	 * RETURN:
 	 * 		char* line - Line read from file descriptor.
 	 *
-	 * 					This will be NULL if no bytes could be read, or if the
-	 * 					fd. was closed without an endline immediately preceeding
-	 * 					the EOF.
+	 * 					If no bytes can be read, the program will exit.
 	 *
-	 * 					Calling the function a second time will return NULL if
-	 * 					the fd was closed immediately after a newline. Otherwise
-	 * 					it will return a string that was preceeded by a newline,
-	 * 					but not followed with an EOF instead of a newline.
-	 * 					(referred to as a pseudo-line)
+	 * 					If there are no lines remaining, this will return null,
+	 * 					and on a second call, return the pseudo-line and unlock
+	 * 					for another file descriptor.
+	 *
+	 * 					A pseudo line is a string that was preceeded by a newline,
+	 * 					but followed with an EOF instead of a newline.
 	 *
 	 * NOTE:
 	 * 		Once called, this function will be locked to the given file
@@ -269,8 +268,7 @@ fdReadLine(int fd) {
 	int nLine,leftoverLength, newlineBufferOffset=0, usedLeftover=0;
 	int lineSizeGrowth, splitIndex;
 	int lineSize=1; 						// Always space for a null byte
-	int readFailed=0;
-	int maxRetry = 5;						// Max consecutive read failures allowed
+	int readFailed=0, readAttempted=0;
 
 	/* Buffer leftover tracking */
 	static char *leftover; 					// Buffer lefover
@@ -287,26 +285,36 @@ fdReadLine(int fd) {
 	if((lastFd!=NULL) && (fd!=lastFd)){return NULL;}
 	if(lastFd==NULL){lastFd=fd;}
 
+	void unlock() {
+		fdHasClosed=0;
+		lastFd=NULL;
+		free(leftover);
+		leftoverSize=0;
+	}
+
 	/* Return non newline terminated leftover if fd has closed */
 	if(fdHasClosed){
 		char* newLineLocation=strnchr(leftover, '\n',leftoverSize);
-		if (newLineLocation=NULL){
-			lastFd=NULL;
-			fdHasClosed=0;
-			return(leftover);
+
+		/* line is initially what is in leftover */
+		line=malloc(leftoverSize+1);
+		strncpy(line, leftover,leftoverSize);
+		line[leftoverSize]='\0';
+
+		/* Leftover has no newline in it - return the leftover */
+		if (newLineLocation==NULL){
+			unlock();
+		} else {
+			splitIndex=newLineLocation-leftover;
+			extractLineCacheLeftover(&line, splitIndex, leftoverSize);
 		}
-		splitIndex=newLineLocation-leftover;
-			extractLineCacheLeftover(&leftover, splitIndex, leftoverSize);
-		}
-		lastFd=NULL; //unlock
-		fdHasClosed=0;
-		return(leftover);
+		return(line);
 	}
 
-	/* There is no newline contained in our buffer and we have more data to read*/
+	/* Repeated read buffer untill a newline is found or run out of data */
 	do {
 
-		/* Refill buffer & locate newline if present. */
+		/* Use the cached leftover as inital read */
 		usedLeftover=0;
 		if (leftover!=NULL) {
 
@@ -320,16 +328,17 @@ fdReadLine(int fd) {
 			leftoverSize=0;
 			leftover=NULL;
 
+		/* Read from fd */
 		} else {
 
 			bytesRead = read(fd, buffer, (RECVBUFFER_SIZE));
+			readAttempted=1;
 
 			// Retry if an error occured on reading, shortcircuit if EOF
 			if(bytesRead<=0){
 				(bytesRead<0)&&readFailed++;
 				continue;
 			}
-
 		}
 		buffer[bytesRead]='\0';
 		newLineLocation = strchr(buffer, '\n');
@@ -339,50 +348,42 @@ fdReadLine(int fd) {
 		strcpy(line[lineSize-1], buffer); // Overwrite old '\0'
 		lineSize+=bytesRead;
 
-
-	/* Repeated read buffer untill a newline is found or run out of data */
 	} while (newLineLocation == NULL && ((bytesRead==RECVBUFFER_SIZE)
-											||(readFailed&&(readFailed<=maxRetry))
+											||(readFailed&&(readFailed<=MAX_READATTEMPT))
 											||(usedLeftover)));
 
-	// The fd had a repeated line errors. (No '\n' found if this is true here)
+	// The fd had repeated read errors.
 	if(bytesRead<0){
 
-		// Put line into the leftover - leave off the null byte
-		realloc(leftover, lineSize-1);
-		strncpy(leftover, line, lineSize-1);
-		return(NULL);
+		log("The socket could not be read from");
+		exit(ESOCKETREAD);
+
 	}
-
-	// Unlock function for calling with other file descriptors. (No '\n' found)
-	if (bytesRead>0 && newLineLocation==NULL) {
-		lastFd=NULL;
-		fdHasClosed=1;
-
-		/* We are at the end of transmission, but there was no final newline sent. */
-		/* Put leftover in storage, return it if called again */
-		realloc(leftover, bytesRead);
-		strncpy(leftover, buffer, bytesRead);
-		}
-
-	// Read suceeded. EOF found y/n
 
 	/* Assemble the line and write any buffer leftover into storage */
 	if (newLineLocation!=NULL) {
 
-		/* Length of post '\n' leftover */
 		newlineBufferOffset=newLineLocation-buffer;
-
-		/* Leftover copied 'as is' (without null byte) */
 		leftoverSize = bytesRead-(newlineBufferOffset+1);
-
 		extractLineCacheLeftover(line, lineSize-leftoverSize-1, lineSize);
 
+		/* Bytes were read (>0 since nl found) and EOF encountered */
+		if (bytesRead<RECVBUFFER_SIZE) {
+			fdHasClosed=1;
+		}
 
-		// There is no lefover. The read failed or
 		return(line);
 	}
 
+	/* Hereon, a newline was not found, but a read was attempted */
+
+	// Put line into the leftover - leave off the null byte
+	fdHasClosed=1;
+	realloc(leftover, lineSize-1); // free leftover if nothing leftover
+	strncpy(leftover, line, lineSize-1);
+	return(NULL); // If the function is called again, the leftover will be returned.
+
+	// Read suceeded. EOF found y/n
 	void extractLineCacheLeftover(char** line, int nLine, int length) {
 		/**
 		 * Given a string & a split index trim the string to the size of the
@@ -396,6 +397,10 @@ fdReadLine(int fd) {
 		 *
 		 * 	RETURN:
 		 * 		Mutate string, leftover, leftoverSize
+		 *
+		 * 	NOTE:
+		 * 		Leftover saved as is, with no null byte.
+		 *
 		 */
 
 		/* Save leftover */
@@ -408,9 +413,6 @@ fdReadLine(int fd) {
 		*line = realloc(*line, (nLine+1));
 		(*line)[nLine]='\0'; // Overwrite with null byte
 	}
-
-
-	return NULL;
 }
 
 request_t readRequest(int socketFd) {

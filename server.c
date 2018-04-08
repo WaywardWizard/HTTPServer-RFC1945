@@ -48,82 +48,46 @@
 #include <regex.h>
 #include <errno.h>
 
+#include "server.h"
+
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h> /* -l pthread when compiling */
 
-#define MAX_BACKLOG  1024				// Max listen backlog
-#define   RECVBUFFER_SIZE  4096
-#define	 MAX_READATTEMPT  5				// Max consecutive read failures allowed
-
-#define true  1
-#define false 0
-
-#define  EBINDFAILED	  7
-#define 	EUSAGE 		  5
-#define  ELISTEN		  11
-#define  EEOF	      13 // At end of file, cant read any line
-#define  ESOCKETREAD	  17 // Could not read from socket after repeated attempts
-#define  EINVALID_REQUEST 19 // Request was malformed
-#define
-
-#define	METHOD_REGEX "^GET"
-#define	URI_REGEX RELURI
-
-/* These are not #define because # cannot go in macro's*/
-#define CTL			 "[[:cntrl:]]"
-#define HEX			 "[A-Fa-f[:digit:]]"
-#define SAFE			 "[$-_.]";
-#define EXTRA		 "[!*'(),]"
-#define NATIONAL      "[][{}|\^~`]"
-#define ESCAPE		 "(%"##HEX##"{2})"
-#define UNRESERVED	 "[[:alpha:][:digit:]"##SAFE##EXTRA##NATIONAL##"]";
-#define UCHAR 		 "["##UNRESERVED##ESCAPE##"]"
-#define PCHAR		 "[:@+=&"##UCHAR##"]"
-#define SEGMENT 		 PCHAR##"*"
-#define FSEGMENT		 PCHAR##"+"
-#define PATH			 FSEGMENT##"(/"##SEGMENT##")*"
-#define PARAM		 "("##PCHAR##"|/)*"
-#define PARAMS		 PARAM##"(;"##PARAM##")*"
-#define RELPATH		 PATH##"?(;"##PARAMS##")?"##QUERY##"?"
-#define ABSPATH		 "/"##RELPATH
-#define RELURI	     ABSPATH ## "|" ## RELPATH
-
-
 typedef enum rMethod {GET, POST, HEAD} rMethod_e;
 
-typedef struct generalHeader {
+struct generalHeader {
 	char* date;
 	char* pragma;
-} gHeader_t;
+};
 
-typedef struct requestHeader { // Request header fields
+struct requestHeader { // Request header fields
 	char* authorization;
 	char* from;
 	char* ifModifiedSince;
 	char* referrer;
 	char* userAgent;
-} rqHeader_t;
+};
 
-typedef struct entityHeader { // Entity header fields
+struct entityHeader { // Entity header fields
 	char* allow;
 	char* contentEncoding;
 	char* contentLength;
 	char* contentType;
 	char* expires;
 	char* lastModified;
-} eHeader_t;
+};
 
-typedef struct responseHeader { // Response header fields
+struct responseHeader { // Response header fields
 	char* location;
 	char* server;
 	char* wWWAuthenticate;
-} rsHeader_t;
+};
 
-typedef struct request {  // Request fields
+struct request {  // Request fields
 	/* Request Line */
-	rMethod_e method;
+	char* method;
 	char* uri;
 	char* httpVersion;
 
@@ -136,20 +100,50 @@ typedef struct request {  // Request fields
 	/* Entity header fields */
 	eHeader_t *eHeader;
 
-} request_t;
+};
+
+void bindSocket(int socketFd, const struct sockaddr_in *socketAddr);
+int deployConcierge(int port);
+char* fdReadLine(int fd);
+void flushFd(int fd);
+struct sockaddr_in *getSocketAddress(in_addr_t ipaddress, int port);
+void mylog(char* m);
+void notifyInvalidRequest();
+int parseRequestLine(char* requestLine, request_t *r);
+void printUsage();
+request_t* readRequest(int socketFd);
+void validatePort(int port);
+void validateServerRoot(char* serverRoot);
+void listenSocket(int socketFd, int backlog);
+char* extractMatch(char* regex, char* searchString, char** destination);
+request_t* initRequest();
+void handleInvalidHeader();
 
 int
 main(int argc, char* argv[]){
-	if (argc!=2)
+	if (argc!=3) {
 		printUsage();
+	}
 
-	char* serverRoot = argv[1];
+	char* serverRoot = argv[2];
 	validateServerRoot(serverRoot);
 
-	int port = atoi(argv[2]);
+	int port = atoi(argv[1]);
 	validatePort(port);
 
 	deployConcierge(port);
+}
+
+request_t*
+initRequest(){
+	request_t* r = malloc(sizeof(request_t));
+	r->eHeader=NULL;
+	r->gHeader=NULL;
+	r->httpVersion=NULL;
+	r->method=NULL;
+	r->uri=NULL;
+	r->rHeader=NULL;
+	return(r);
 }
 
 int
@@ -165,21 +159,17 @@ deployConcierge(int port){
 	int socketFd = socket(AF_INET, SOCK_STREAM, 0);
 	struct sockaddr_in *socketAddr = getSocketAddress(INADDR_ANY, port);
 	bindSocket(socketFd, socketAddr);
-	int e = listen(socketFd, MAX_BACKLOG);
-
-	/* Assert listen primitive was sucessful */
-	if(e!=0) {
-		log("Listen primitive failed");
-		exit(ELISTEN);
-	}
+	listenSocket(socketFd, MAX_BACKLOG);
 
 	/* Recieve requests and hand them off to worker threads */
+	int workSocket = accept(socketFd,NULL, NULL);
 	while(true) {
-		workSocket = accept(socketFd,NULL, NULL);
-		request_t request = readRequest(workSocket);
+		request_t request = *readRequest(workSocket);
+		mylog("Method:\n\t");
+		mylog(request.method);
+		mylog("URI:\n\t");
+		mylog(request.uri);
 	}
-
-
 }
 
 void
@@ -190,10 +180,9 @@ validatePort(int port) {
 	 * Print usage and exit if invalid
 	 */
 	if (!(port>1023) || !(port<=65535)){
+		mylog("Given port outside valid range [1024, 65535]");
 		printUsage();
 	}
-	log("Given port outside valid range [1024, 65535]");
-	printUsage();
 }
 
 void
@@ -204,18 +193,22 @@ validateServerRoot(char* serverRoot){
 
 	if(e==0){
 		return;
-	}
-
-	if(e==EACCES){
-		log("No read permissions on server root or list permissions on parent of server root.");
-	} else if (e==ENOENT) {
-		log("The given server root path does not exist on the file system");
-	} else if (e==EROFS) {
-		log("The given server root path is read only");
 	} else {
-		log("There is a problem with the given server root");
+		switch(errno) {
+		case EACCES:
+			mylog("No read permissions on server root or list permissions on parent of server root.");
+			break;
+		case ENOENT:
+			mylog("The given server root path does not exist on the file system");
+			break;
+		case EROFS:
+			mylog("The given server root path is read only");
+			break;
+		default:
+			mylog("There is a problem with the given server root");
+		}
+		printUsage();
 	}
-	printUsage();
 }
 
 void
@@ -223,12 +216,12 @@ printUsage(){
 	/**
 	 * Print usage instructions and terminate with a usage error code.
 	 */
-	fprintf(stdout, "USAGE:\n");
+	fprintf(stdout, "\nUSAGE:\n");
 	fprintf(stdout, "./serverExecutable serverPort documentRoot\n");
 	fprintf(stdout, "\n");
 	fprintf(stdout, "serverPort: Port to listen on. int in [1024, 65535] \n");
-	fprintf(stdout, "documentRoot: Path so server's document root. Must \n");
-	fprintf(stdout, "			   exist and be writable");
+	fprintf(stdout, "documentRoot: Path so server's document root. Must");
+	fprintf(stdout, " exist and be writable\n\n");
 	exit(EUSAGE);
 }
 
@@ -243,24 +236,55 @@ struct sockaddr_in
 	 *
 	 * 		port - port to bind to
 	 */
-	struct sockaddr_in address;
-	bzero(address, sizeof(address));
-	address.sin_family=AF_INET;			/* State IP Socket */
-	address.sin_addr.s_addr=htonl(ipaddress);
-	address.sin_port=htons(port);		/* Port in network compatible form */
-	return(&address);
+	struct sockaddr_in *address =malloc(sizeof(struct sockaddr_in));
+	bzero(address, sizeof(*address));
+	address->sin_family=AF_INET;			/* State IP Socket */
+	address->sin_addr.s_addr=htonl(ipaddress);
+	address->sin_port=htons(port);		/* Port in network compatible form */
+	return(address);
 }
 
+void
+listenSocket(int socketFd, int backlog) {
+	int e = listen(socketFd, backlog);
+	if(e==0){
+		return;
+	} else if (e==-1) {
+		switch(e) {
+		default:
+			mylog("Could not listen on socket.");
+		}
+		exit(ELISTEN);
+	}
+}
+
+void
 bindSocket(int socketFd, const struct sockaddr_in *socketAddr) {
 	int e = bind(socketFd, (struct sockaddr *) socketAddr, sizeof(struct sockaddr_in));;
-	if(e==0){return;}
+	if(e==0){
+		return;
+	} else if (e==-1) {
 
-	switch(e) {
-	case EADDRINUSE:
-		log("Could not bind socket. Address given already in use");
-		break;
+		switch(e) {
+		case EADDRINUSE:
+			mylog("Could not bind socket. Address given already in use");
+			break;
+		default:
+			mylog("Could not bind socket.");
+		}
+		exit(EBINDFAILED);
 	}
-	exit(EBINDFAILED);
+}
+
+void
+flushFd(int fd){
+	/**
+	 * Read all reminaing content in file descriptor untill EOF hit.
+	 */
+	char* line;
+	while((line=fdReadLine(fd))!=NULL){
+		free(line);
+	}
 }
 
 char*
@@ -271,14 +295,14 @@ fdReadLine(int fd) {
 	 * RETURN:
 	 * 		char* line - Line read from file descriptor.
 	 *
-	 * 					If no bytes can be read, the program will exit.
-	 *
-	 * 					If there are no lines remaining, this will return null,
-	 * 					and on a second call, return the pseudo-line and unlock
-	 * 					for another file descriptor.
-	 *
 	 * 					A pseudo line is a string that was preceeded by a newline,
 	 * 					but followed with an EOF instead of a newline.
+	 *
+	 * 					If no bytes can be read, the program will exit with an
+	 * 					ESOCKETREAD error.
+	 *
+	 * 					If there are no lines remaining, this will return null,
+	 *
 	 *
 	 * 					This return string should be free'd by the caller
 	 *
@@ -294,16 +318,51 @@ fdReadLine(int fd) {
 	 * 		final pseudo-line.
 	 */
 
-	int nLine,leftoverLength, newlineBufferOffset=0, usedLeftover=0;
-	int lineSizeGrowth, splitIndex;
-	int lineSize=0;
-	int readFailed=0, readAttempted=0;
 
 	/* Buffer leftover tracking */
 	static char *leftover; 					// Buffer lefover, not '\0' terminated
 	static int leftoverSize;
-	static int lastFd=NULL;
+	static int lastFd=-1;
 	static int fdHasClosed=0;
+
+
+	// Read suceeded. EOF found y/n
+	void extractLineCacheLeftover(char** line, int nLine, int length) {
+		/**
+		 * Given a string & a split index trim the string to the size of the
+		 * split index (inclusive of split index), overwrite the character at
+		 * split index with a null byte and save the remainder in leftover.
+		 *
+		 * ARGUMENT:
+		 * 		char** line - address of string to split
+		 * 		int nLine   - split index
+		 * 		int length	- the string length
+		 *
+		 * 	RETURN:
+		 * 		Mutate line, leftover, leftoverSize
+		 *
+		 * 		Line is always null terminated, and includes the '\n' char
+		 *
+		 * 	NOTE:
+		 * 		Leftover saved as is, with no null byte.
+		 *
+		 */
+
+		/* Save leftover */
+		leftoverSize=length-(nLine+1);
+		if(leftoverSize>0){
+			strncpy(leftover, line[nLine+1], leftoverSize);
+		}
+
+		/* Shrink line, leave space for '\n\0'*/
+		*line = realloc(*line, (nLine+1+1));
+		(*line)[nLine+1]='\0';
+	}
+
+	int nLine,leftoverLength, newlineBufferOffset=0, usedLeftover=0;
+	int lineSizeGrowth, splitIndex;
+	int lineSize=0;
+	int readFailed=0, readAttempted=0;
 
 	/* Holds the line, includes the final '\n' & appended with '\0' on return */
 	char *line=NULL;
@@ -312,18 +371,18 @@ fdReadLine(int fd) {
 	ssize_t bytesRead;
 
 	/* Lock function to fd */
-	if((lastFd!=NULL) && (fd!=lastFd)){return NULL;}
-	if(lastFd==NULL){lastFd=fd;}
+	if((lastFd!=-1) && (fd!=lastFd)){return NULL;}
+	if(lastFd==-1){lastFd=fd;}
 
 	void unlock() {
 		fdHasClosed=0;
-		lastFd=NULL;
+		lastFd=-1;
 		free(leftover);
 		leftoverSize=0;
 	}
 
 	if(fdHasClosed){
-		char* newLineLocation=strnchr(leftover, '\n',leftoverSize);
+		char* newLineLocation=memchr(leftover, '\n',leftoverSize);
 
 		/* line is initially what is in leftover */
 		line=malloc(leftoverSize+1);
@@ -380,7 +439,7 @@ fdReadLine(int fd) {
 
 		/* Increse line size, and copy buffered data into line*/
 		line = realloc(line, (lineSize+bytesRead));
-		strncpy(line[lineSize], buffer, bytesRead); /* Ignore null bytes, whole buffer*/
+		strncpy(line+lineSize, buffer, bytesRead); /* Ignore null bytes, whole buffer*/
 		lineSize+=bytesRead;
 
 	} while (newLineLocation == NULL && ((bytesRead==RECVBUFFER_SIZE)
@@ -390,7 +449,7 @@ fdReadLine(int fd) {
 	// The fd had repeated read errors.
 	if(bytesRead<0){
 
-		log("The socket could not be read from");
+		mylog("The socket could not be read from");
 		exit(ESOCKETREAD);
 
 	}
@@ -400,7 +459,7 @@ fdReadLine(int fd) {
 
 		newlineBufferOffset=newLineLocation-buffer;
 		leftoverSize = bytesRead-(newlineBufferOffset+1);
-		extractLineCacheLeftover(line, lineSize-leftoverSize-1, lineSize);
+		extractLineCacheLeftover(&line, lineSize-leftoverSize-1, lineSize);
 
 		/* Bytes were read (>0 since nl found) and EOF encountered */
 		if ((bytesRead<RECVBUFFER_SIZE) && !(usedLeftover)){
@@ -411,48 +470,24 @@ fdReadLine(int fd) {
 	}
 
 	/* INVARIANT: A newline was not found, but a read was attempted & returned
-	 * less than the number of bytes in our buffer and hence has reached EOF */
+	 * less than the number of bytes in our buffer and hence has reached EOF.
+	 * This is an invariant because the reading loop will not exit until such*/
 
 	// Put any remainder into the leftover (leave off the null byte)
 	fdHasClosed=1;
 	if(lineSize>0){
-		leftover=malloc(lineSize); // free leftover if nothing leftover
+		// Put the line in leftover
+		leftover=malloc(lineSize);
 		strncpy(leftover, line, lineSize);
+
+		// Yield a line from whatever is left over
+		return(fdReadLine(fd));
 	}
-	return(NULL); // If the function is called again, the leftover will be returned.
 
-	// Read suceeded. EOF found y/n
-	void extractLineCacheLeftover(char** line, int nLine, int length) {
-		/**
-		 * Given a string & a split index trim the string to the size of the
-		 * split index (inclusive of split index), overwrite the character at
-		 * split index with a null byte and save the remainder in leftover.
-		 *
-		 * ARGUMENT:
-		 * 		char** line - address of string to split
-		 * 		int nLine   - split index
-		 * 		int length	- the string length
-		 *
-		 * 	RETURN:
-		 * 		Mutate line, leftover, leftoverSize
-		 *
-		 * 		Line is always null terminated, and includes the '\n' char
-		 *
-		 * 	NOTE:
-		 * 		Leftover saved as is, with no null byte.
-		 *
-		 */
-
-		/* Save leftover */
-		leftoverSize=length-(nLine+1);
-		if(leftoverSize>0){
-			strncpy(leftover, line[nLine+1], leftoverSize);
-		}
-
-		/* Shrink line, leave space for '\n\0'*/
-		*line = realloc(*line, (nLine+1+1));
-		(*line)[nLine+1]='\0';
-	}
+	/* The read was empty, and there was no leftover. The fd has been cleared
+	 * of it's lines, and its final pseudo line. Now return null */
+	unlock();
+	return(NULL);
 }
 
 request_t
@@ -460,61 +495,94 @@ request_t
 	/**
 	 * Read a request from a connected socket & return a request structure
 	 */
-	request_t r;
+	request_t* r=initRequest();
 	char* requestLine = fdReadLine(socketFd);
+	fdReadLine(socketFd);
 
 	if(requestLine==NULL){
 		notifyInvalidRequest();
 	}
 
-	parseRequestLine(requestLine, &r);
-	return(&r);
+	parseRequestLine(requestLine, r);
+	return(r);
 }
 
 
 void
 notifyInvalidRequest() {
-	log("Request invalid.");
-	exit(EINVALID_REQUEST);
+	mylog("Request invalid.");
+	exit(1);
 }
 
 void
-log(char* m) {
+mylog(char* m) {
 	printf("%s\n",m);
 }
 
-void
+int
 parseRequestLine(char* requestLine, request_t *r) {
 	/**
-	 * Load http1.0 request line into request structure
+	 * Load http1.0 request line into request structure. If the request is
+	 * malformed, return EINVALID_REQUEST and write null bytes into request struct
+	 */
+
+	/* Extract method */
+	requestLine = extractMatch(METHOD_REGEX, requestLine, &(r->method));
+	if (requestLine==NULL){
+		return(EINVALID_REQUEST);
+	}
+
+	/* Extract request URI */
+	extractMatch(URI_REGEX, requestLine, &(r->uri));
+	return(0);
+}
+
+char*
+extractMatch(char* regex, char* searchString, char** destination) {
+	/**
+	 * Search <string> for match with <regex> Write match into match
+	 * destination.
+	 *
+	 * Terminates if an error occured
+	 *
+	 * RETURN:
+	 * 		NULL if no match.
+	 * 		Else, pointer to remainder of search string.
 	 */
 	regex_t rx;
 	regmatch_t match;
-	int nChar;
+	int errSize=100; // Default error message size
+	int error = regcomp(&rx, regex, REG_EXTENDED);
+	int matchSize;
 
-	/* Extract method */
-	regcomp(rx, METHOD_REGEX, 0);
-	regexec(rx,requestLine, 1, &match, 0);
-	nChar = match.rm_eo-match.rm_eo;
-	r->method=malloc(nChar);
-	strncpy(r->method,requestLine+match.rm_so,nChar);
-	regfree(rx);
+	/* Check compilation sucessful */
+	if(error!=0){
+		char errorMessage[errSize];
+		regerror(error,&rx,errorMessage,errSize);
+		mylog("Regex compilation error: \n");
+		mylog("\t");
+		mylog(errorMessage);
+		exit(EREGCOMP);
+	}
 
-	printf("%s\n",RELURI);
+	/* Match */
+	error = regexec(&rx,searchString, 1, &match, 0);
+	regfree(&rx);
 
-	/* Extract request URI */
-	regcomp(rx, RELURI, 0);
-	regexec(rx,requestLine+(match.rm_eo+1), 1, &match, 0);
-	nChar = match.rm_eo-match.rm_eo;
-	r->uri=malloc(nChar);
-	strncpy(r->method,requestLine+match.rm_so,nChar);
-	regfree(rx);
+	/* Allocate destination memory & write match into destination */
+	if (error!=REG_NOMATCH) {
+		matchSize = match.rm_eo-match.rm_so;
+		*destination = malloc(matchSize+1);
+		strncpy(*destination, searchString+match.rm_so, matchSize);
+		(*destination)[matchSize]='\0';
+		return(searchString+match.rm_eo);
+	}
 
+	/* No match found */
+	return(NULL);
 }
 
-
-
-
-
-
-
+void
+handleInvalidHeader(){
+	mylog("Header was invalid. Worker thread closing\n");
+}

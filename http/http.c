@@ -1,10 +1,6 @@
-/*
- * http.c
- *
- *  Created on: 11 Apr. 2018
- *      Author: ben
- */
-
+#include "httpStructures.h"
+#include "../utility/tcpSocketIo.h"
+#include <stdlib.h>
 
 request_t
 *readRequest(int socketFd) {

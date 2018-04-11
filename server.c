@@ -49,83 +49,36 @@
 #include <errno.h>
 
 #include "server.h"
+#include "tcpSocketIo.h"
 
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <pthread.h> /* -l pthread when compiling */
 
 typedef enum rMethod {GET, POST, HEAD} rMethod_e;
 
-struct generalHeader {
-	char* date;
-	char* pragma;
-};
 
-struct requestHeader { // Request header fields
-	char* authorization;
-	char* from;
-	char* ifModifiedSince;
-	char* referrer;
-	char* userAgent;
-};
-
-struct entityHeader { // Entity header fields
-	char* allow;
-	char* contentEncoding;
-	char* contentLength;
-	char* contentType;
-	char* expires;
-	char* lastModified;
-};
-
-struct responseHeader { // Response header fields
-	char* location;
-	char* server;
-	char* wWWAuthenticate;
-};
-
-struct request {  // Request fields
-	/* Request Line */
-	char* method;
-	char* uri;
-	char* httpVersion;
-
-	/* Request header fields */
-	rqHeader_t *rHeader;
-
-	/* General header fields */
-	gHeader_t *gHeader;
-
-	/* Entity header fields */
-	eHeader_t *eHeader;
-
-};
-
-void bindSocket(int socketFd, const struct sockaddr_in *socketAddr);
 int deployConcierge(int port);
 char* fdReadLine(int fd);
 void flushFd(int fd);
-struct sockaddr_in *getSocketAddress(in_addr_t ipaddress, int port);
-void mylog(char* m);
 void notifyInvalidRequest();
 int parseRequestLine(char* requestLine, request_t *r);
 void printUsage();
 request_t* readRequest(int socketFd);
 void validatePort(int port);
 void validateServerRoot(char* serverRoot);
-void listenSocket(int socketFd, int backlog);
 char* extractMatch(char* regex, char* searchString, char** destination);
-request_t* initRequest();
 void handleInvalidHeader();
+void stripTrailingSlash();
+void compilePathFromURI(char* uri, char* rootPath);
 
 int
 main(int argc, char* argv[]){
+
 	if (argc!=3) {
 		printUsage();
 	}
 
 	char* serverRoot = argv[2];
+	stripTrailingSlash(serverRoot);
 	validateServerRoot(serverRoot);
 
 	int port = atoi(argv[1]);
@@ -134,20 +87,20 @@ main(int argc, char* argv[]){
 	deployConcierge(port);
 }
 
-request_t*
-initRequest(){
-	request_t* r = malloc(sizeof(request_t));
-	r->eHeader=NULL;
-	r->gHeader=NULL;
-	r->httpVersion=NULL;
-	r->method=NULL;
-	r->uri=NULL;
-	r->rHeader=NULL;
-	return(r);
+void
+stripTrailingChar(char* path,char c) {
+	/**
+	 * Remove a trailing slash from a string if it exists.
+	 */
+	int l = strlen(path);
+	if (path[l-1]==c){
+		path[l-1]='\0';
+		realloc(path, l-1);
+	}
 }
 
 int
-deployConcierge(int port){
+deployConcierge(int port, char* serverRoot){
 	/**
 	 * Deploy concierge to hand off all incoming connections.
 	 *
@@ -155,16 +108,21 @@ deployConcierge(int port){
 	 * 		integer file descriptor for soc
 	 */
 
-	/* TCP socket atop IP network layer */
-	int socketFd = socket(AF_INET, SOCK_STREAM, 0);
-	struct sockaddr_in *socketAddr = getSocketAddress(INADDR_ANY, port);
-	bindSocket(socketFd, socketAddr);
-	listenSocket(socketFd, MAX_BACKLOG);
+	int socketFd=getListeningSocket();
+);
 
 	/* Recieve requests and hand them off to worker threads */
 	int workSocket = accept(socketFd,NULL, NULL);
+
+	runWorker(socketFd, serverRoot);
+}
+
+void
+runWorker(int socketFd, char* rootPath) {
 	while(true) {
-		request_t request = *readRequest(workSocket);
+		request_t request = *readRequest(socketFd);
+		replyRequest(&request, socketFd, rootPath);
+
 		mylog("Method:\n\t");
 		mylog(request.method);
 		mylog("URI:\n\t");
@@ -189,25 +147,41 @@ void
 validateServerRoot(char* serverRoot){
 	/*Check the server root exists and the server process has read and
 	 * write permissions on it. */
-	int e = access(serverRoot, F_OK|R_OK|W_OK);
+	testFile(serverRoot, F_OK|R_OK) && printUsage();
+}
 
+int testFile(char* path, int tests) {
+	/**
+	 * Tests a path with unistd.h access()
+	 *
+	 * ARGUMENT:
+	 * 	path - location of file or folder to test
+	 * 	tests - bitwise or of F_OK, R_OK, W_OK as per 'access()' documentation
+	 *
+	 * RETURN:
+	 * 	true if path passes all tests
+	 *
+	 * NOTE:
+	 *	 Requires #include <unistd.h>
+	 */
+	int e = access(path, tests);
 	if(e==0){
-		return;
+		return(TRUE);
 	} else {
 		switch(errno) {
 		case EACCES:
-			mylog("No read permissions on server root or list permissions on parent of server root.");
+			mylog("No read permissions or list permissions on parent.");
 			break;
 		case ENOENT:
-			mylog("The given server root path does not exist on the file system");
+			mylog("The given file path does not exist on the file system");
 			break;
 		case EROFS:
-			mylog("The given server root path is read only");
+			mylog("The given file is read only");
 			break;
 		default:
-			mylog("There is a problem with the given server root");
+			mylog("There is a problem with the given path");
 		}
-		printUsage();
+		return(FALSE);
 	}
 }
 
@@ -223,57 +197,6 @@ printUsage(){
 	fprintf(stdout, "documentRoot: Path so server's document root. Must");
 	fprintf(stdout, " exist and be writable\n\n");
 	exit(EUSAGE);
-}
-
-struct sockaddr_in
-*getSocketAddress(in_addr_t ipaddress, int port){
-	/***
-	 * Return a TCP/IP socket address at <ipaddress>:<port>
-	 *
-	 * ARGUMENT:
-	 * 		ipaddress - a single ip addr or range of addr which the address could
-	 * 		be bound to.
-	 *
-	 * 		port - port to bind to
-	 */
-	struct sockaddr_in *address =malloc(sizeof(struct sockaddr_in));
-	bzero(address, sizeof(*address));
-	address->sin_family=AF_INET;			/* State IP Socket */
-	address->sin_addr.s_addr=htonl(ipaddress);
-	address->sin_port=htons(port);		/* Port in network compatible form */
-	return(address);
-}
-
-void
-listenSocket(int socketFd, int backlog) {
-	int e = listen(socketFd, backlog);
-	if(e==0){
-		return;
-	} else if (e==-1) {
-		switch(e) {
-		default:
-			mylog("Could not listen on socket.");
-		}
-		exit(ELISTEN);
-	}
-}
-
-void
-bindSocket(int socketFd, const struct sockaddr_in *socketAddr) {
-	int e = bind(socketFd, (struct sockaddr *) socketAddr, sizeof(struct sockaddr_in));;
-	if(e==0){
-		return;
-	} else if (e==-1) {
-
-		switch(e) {
-		case EADDRINUSE:
-			mylog("Could not bind socket. Address given already in use");
-			break;
-		default:
-			mylog("Could not bind socket.");
-		}
-		exit(EBINDFAILED);
-	}
 }
 
 void
@@ -489,100 +412,16 @@ fdReadLine(int fd) {
 	unlock();
 	return(NULL);
 }
-
-request_t
-*readRequest(int socketFd) {
-	/**
-	 * Read a request from a connected socket & return a request structure
-	 */
-	request_t* r=initRequest();
-	char* requestLine = fdReadLine(socketFd);
-	fdReadLine(socketFd);
-
-	if(requestLine==NULL){
-		notifyInvalidRequest();
-	}
-
-	parseRequestLine(requestLine, r);
-	return(r);
-}
-
-
-void
-notifyInvalidRequest() {
-	mylog("Request invalid.");
-	exit(1);
-}
-
-void
-mylog(char* m) {
-	printf("%s\n",m);
-}
-
-int
-parseRequestLine(char* requestLine, request_t *r) {
-	/**
-	 * Load http1.0 request line into request structure. If the request is
-	 * malformed, return EINVALID_REQUEST and write null bytes into request struct
-	 */
-
-	/* Extract method */
-	requestLine = extractMatch(METHOD_REGEX, requestLine, &(r->method));
-	if (requestLine==NULL){
-		return(EINVALID_REQUEST);
-	}
-
-	/* Extract request URI */
-	extractMatch(URI_REGEX, requestLine, &(r->uri));
-	return(0);
-}
-
-char*
-extractMatch(char* regex, char* searchString, char** destination) {
-	/**
-	 * Search <string> for match with <regex> Write match into match
-	 * destination.
-	 *
-	 * Terminates if an error occured
-	 *
-	 * RETURN:
-	 * 		NULL if no match.
-	 * 		Else, pointer to remainder of search string.
-	 */
-	regex_t rx;
-	regmatch_t match;
-	int errSize=100; // Default error message size
-	int error = regcomp(&rx, regex, REG_EXTENDED);
-	int matchSize;
-
-	/* Check compilation sucessful */
-	if(error!=0){
-		char errorMessage[errSize];
-		regerror(error,&rx,errorMessage,errSize);
-		mylog("Regex compilation error: \n");
-		mylog("\t");
-		mylog(errorMessage);
-		exit(EREGCOMP);
-	}
-
-	/* Match */
-	error = regexec(&rx,searchString, 1, &match, 0);
-	regfree(&rx);
-
-	/* Allocate destination memory & write match into destination */
-	if (error!=REG_NOMATCH) {
-		matchSize = match.rm_eo-match.rm_so;
-		*destination = malloc(matchSize+1);
-		strncpy(*destination, searchString+match.rm_so, matchSize);
-		(*destination)[matchSize]='\0';
-		return(searchString+match.rm_eo);
-	}
-
-	/* No match found */
-	return(NULL);
-}
-
 void
 handleInvalidHeader(){
 	mylog("Header was invalid. Worker thread closing\n");
+}
+
+void handleInvalidPath() {
+	mylog("Path in URI was non-existant or invalid");
+	exit(EPATH_INVALID);
+}
+
+void handleInvalidRequest() {
+}
 }

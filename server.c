@@ -45,7 +45,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <regex.h>
+/*#include <regex.h>*/
 #include <errno.h>
 #include <pthread.h> /* -l pthread when compiling */
 #include <semaphore.h>
@@ -57,7 +57,7 @@
 #include "utility/tcpSocketIo.h"
 #include "http/http.h"
 #include "utility/logger.h"
-#include "utility/filesystem.h"
+#include "./utility/filesystem.h"
 
 
 #define SEMAPHORE_SHARE_THREADS 0 // As per man sem_init
@@ -79,7 +79,6 @@ void stripTrailingChar(char** path,char c);
 dsPair_t* initDsPair(int socket, char* dRoot);
 void freeDsPair(dsPair_t* d);
 void waitForThreadAvailable();
-void freeThread();
 void* threadProcessRequest(void* dsPair);
 
 dsPair_t* initDsPair(int socket, char* dRoot) {
@@ -123,8 +122,8 @@ stripTrailingChar(char** path,char c) {
 	 * 	*path is null terminated
 	 */
 	int l = strlen(*path);
-	if (*path[l-1]==c){
-		*path[l-1]='\0';
+	if ((*path)[l-1]==c){
+		(*path)[l-1]='\0';
 		*path = realloc(*path, l-1);
 	}
 }
@@ -155,10 +154,9 @@ deployConcierge(int port, char* serverRoot){
 
 		/* Block until there are we are below the thread limit */
 		waitForThreadAvailable();
-		pthread_create(&thread, NULL, threadProcessRequest, (void*)d);
 
-		freeDsPair(d);free(d);
-		closeSocket(workSocket);
+		/* The thread cleanup handler will close the socket */
+		pthread_create(&thread, NULL, threadProcessRequest, (void*)d);
 	}
 
 }
@@ -170,24 +168,26 @@ void waitForThreadAvailable() {
 	return;
 }
 
-void freeThread(void* arg) {
-	sem_post(&threadQuota);
-}
-
 void* threadProcessRequest(void* dsPair) {
 	/**
 	 * Handle a single http request.
 	 */
 
-	/* Thread should increment the thread quota once it closes */
-	/*pthread_cleanup_push(freeThread, NULL);*/
-
 	dsPair_t* pathSocket=(dsPair_t*)dsPair;
 	int socketFd=pathSocket->socket;
 	char* docRoot=pathSocket->docroot;
 
+
 	/* Process & reply to http request */
 	processRequest(socketFd, docRoot);
+
+	/* Close up the socket and free argument structure */
+	freeDsPair((dsPair_t*)dsPair);
+	free(dsPair);
+	closeSocket(socketFd);
+
+	/* Increment the available thread number*/
+	sem_post(&threadQuota);
 	pthread_exit(NULL);
 }
 
@@ -208,7 +208,7 @@ void
 validateServerRoot(char* serverRoot){
 	/*Check the server root exists and the server process has read and
 	 * write permissions on it. */
-	if(testFile(serverRoot, F_OK|R_OK)) {
+	if(testFile(serverRoot, (F_OK|R_OK))!=true) {
 		printUsage();
 	}
 }

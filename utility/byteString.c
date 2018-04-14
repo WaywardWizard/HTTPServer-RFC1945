@@ -49,3 +49,8 @@ void bsShrink(byteString_t *b, int size) {
 	b->string=realloc(b->string, size);
 	b->length=size;
 }
+
+void bsDestruct(void* b) {
+	byteString_t* bs=b;
+	bsFree(bs);
+}

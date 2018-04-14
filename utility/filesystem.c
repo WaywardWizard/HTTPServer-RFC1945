@@ -1,5 +1,6 @@
 #include <errno.h>
 #include "filesystem.h"
+#include "logger.h"
 
 
 int testFile(char* path, int tests) {
@@ -40,11 +41,9 @@ int testFile(char* path, int tests) {
 
 void handleFileOpenError() {
 	mylog("Failed to open file");
-	exit(EFOPEN);
 }
 
 void handleFileReadError(){
 	mylog("An error occured when reading a file");
-	exit(EFREAD);
 }
 

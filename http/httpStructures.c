@@ -14,11 +14,11 @@ rsHeader_t* _initRsHeader();
 rqHeader_t* _initRqHeader();
 status_t* _initHttpStatus();
 
-_freeHttpStatus(status_t* s);
-_freeRqHeader(rqHeader_t *h);
-_freeRsHeader(rsHeader_t *h);
-_freeGHeader(gHeader_t *h);
-_freeEHeader(eHeader_t* h);
+void _freeHttpStatus(status_t* s);
+void _freeRqHeader(rqHeader_t *h);
+void _freeRsHeader(rsHeader_t *h);
+void _freeGHeader(gHeader_t *h);
+void _freeEHeader(eHeader_t* h);
 
 request_t*
 initRequest(){
@@ -52,7 +52,7 @@ _initHttpStatus(){
 	return(s);
 }
 
-_freeHttpStatus(status_t* s) {
+void _freeHttpStatus(status_t* s) {
 	free(s->code);
 	free(s->phrase);
 }
@@ -68,7 +68,7 @@ _initRqHeader() {
 	return(h);
 }
 
-_freeRqHeader(rqHeader_t *h) {
+void _freeRqHeader(rqHeader_t *h) {
 	free(h->authorization);
 	free(h->from);
 	free(h->ifModifiedSince);
@@ -85,7 +85,7 @@ _initRsHeader() {
 	return(h);
 }
 
-_freeRsHeader(rsHeader_t *h) {
+void _freeRsHeader(rsHeader_t *h) {
 	free(h->location);
 	free(h->server);
 	free(h->wWWAuthenticate);
@@ -99,7 +99,7 @@ _initGHeader() {
 	return(h);
 }
 
-_freeGHeader(gHeader_t *h) {
+void _freeGHeader(gHeader_t *h) {
 	free(h->date);
 	free(h->pragma);
 }
@@ -116,7 +116,7 @@ _initEHeader() {
 	return(h);
 }
 
-_freeEHeader(eHeader_t* h) {
+void _freeEHeader(eHeader_t* h) {
 	free(h->allow);
 	free(h->contentEncoding);
 	free(h->contentLength);
@@ -125,16 +125,16 @@ _freeEHeader(eHeader_t* h) {
 	free(h->lastModified);
 }
 
-freeRequest(request_t* r) {
+void freeRequest(request_t* r) {
 	_freeGHeader(r->gHeader);
 	_freeEHeader(r->eHeader);
-	_freeRsHeader(r->rqHeader);
+	_freeRqHeader(r->rqHeader);
 	free(r->httpVersion);
 	free(r->method);
 	free(r->uri);
 }
 
-freeResponse(response_t* r) {
+void freeResponse(response_t* r) {
 	_freeGHeader(r->gHeader);
 	_freeEHeader(r->eHeader);
 	_freeRsHeader(r->rsHeader);

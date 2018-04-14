@@ -17,6 +17,7 @@ typedef struct byteString byteString_t;
 
 void bsWrite(byteString_t *b, void* byteChain, int length);
 void bsFree(byteString_t *b);
+void bsDestruct(void* b);
 byteString_t *bsCopy(byteString_t *b);
 byteString_t *bsInit();
 void bsShrink(byteString_t *b, int size);

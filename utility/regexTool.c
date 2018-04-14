@@ -5,9 +5,12 @@
  *      Author: ben
  */
 
-#include "regexTool.h"
 #include <regex.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "regexTool.h"
 #include "logger.h"
 #include "bool.h"
 

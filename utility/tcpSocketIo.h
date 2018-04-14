@@ -22,8 +22,8 @@ byteString_t *fdReadBytes(int fd, int byteCount); // read set amt of bytes
 void flushFdBuffer();				// Unlock module for use with other fd's
 void closeSocket(int s);
 
-void sendString(int socketFd, char* s, char c);
-void sendChar(int socketFd, char s);
+void sendString(int socketFd, char* s, char* c);
+void sendChar(int socketFd, char* s);
 void sendFile(int socketFd, FILE *f);
 
 

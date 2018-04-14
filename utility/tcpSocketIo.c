@@ -11,11 +11,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "tcpSocketIo.h"
 #include "bool.h"
 #include "logger.h"
 #include "byteString.h"
+#include "filesystem.h"
 
 
 /* Setting up listening sockets */
@@ -28,8 +31,11 @@ void _moduleInit();
 int *_getFdPointer();
 int _setFd(int fd);
 int _isLocked(int fd);
-byteString_t *_getFdBuffer();
+byteString_t* _getFdBuffer();
 int _setFdBuffer(char* string, int len);
+void _unsetFdBuffer();
+void _sendByte(int socketFd, char* bytes, int length);
+void _sliceByteStringCacheLeftover(byteString_t *b, int sliceIndex);
 
 void _handleSendError();
 
@@ -42,7 +48,7 @@ void _moduleInit() {
 	if(!initialized) {
 		initialized=true;
 		pthread_key_create(&tFd, free);
-		pthread_key_create(&tBuf, bsFree);
+		pthread_key_create(&tBuf, bsDestruct);
 	}
 }
 
@@ -54,7 +60,7 @@ int* _getFdPointer() {
 	 *
 	 * If fd is not null, then _getFdBuffer() will return a non empty string.
 	 */
-	return(pthread_getspecific(&tFd));
+	return(pthread_getspecific(tFd));
 }
 
 int _setFd(int fd) {
@@ -66,12 +72,12 @@ int _setFd(int fd) {
 	free(_getFdPointer());
 	int* threadValue = malloc(sizeof(int));
 	*threadValue=fd;
-	return(pthread_setspecific(&tFd, (void*)threadValue));
+	return(pthread_setspecific(tFd, (void*)threadValue));
 }
 
 void _unsetFd() {
 	free(_getFdPointer());
-	pthread_setspecific(&tFd, NULL);
+	pthread_setspecific(tFd, NULL);
 }
 
 int _isLocked(int fd) {
@@ -85,8 +91,12 @@ int _isLocked(int fd) {
 	 *
 	 * 		false - the module is not locked and can be used
 	 */
-	int currentFd = pthread_getspecific(&tFd);
-	if ((currentFd!=NULL)&&(currentFd!=fd)) {
+
+	/* Initialize thread storage used for locking if required */
+	_moduleInit();
+
+	int *currentFd = (int*)pthread_getspecific(tFd);
+	if ((currentFd!=NULL)&&(*currentFd!=fd)) {
 		return(true);
 	}
 	return(false);
@@ -107,7 +117,7 @@ byteString_t *_getFdBuffer() {
 	/**
 	 * Retrieves the string located in the threads buffer leftover
 	 */
-	return(pthread_getspecific(&tBuf));
+	return(pthread_getspecific(tBuf));
 }
 
 int _setFdBuffer(char*  byteString, int len) {
@@ -130,15 +140,15 @@ int _setFdBuffer(char*  byteString, int len) {
 		b=NULL;
 	}
 	bsFree(_getFdBuffer());
-	return(pthread_setspecific(&tBuf, (void*)b));
+	return(pthread_setspecific(tBuf, (void*)b));
 }
 
 void _unsetFdBuffer() {
 	/**
 	 * Set the fdBuffer to null (& implicitly its length to zero)
 	 */
-	bsFree(_getFdBuffer);
-	pthread_setspecific(&tBuf, NULL);
+	bsFree(_getFdBuffer());
+	pthread_setspecific(tBuf, NULL);
 }
 
 int _getFdBufferLength() {
@@ -229,7 +239,7 @@ byteString_t *fdReadBytes(int fd, int byteCount){
 	 */
 
 	/* Do nothing if locked */
-	if (isLocked()||byteCount<=0) {return NULL;}
+	if (_isLocked(fd)||byteCount<=0) {return NULL;}
 
 	byteString_t *line;
 	int leftoverSize=_getFdBufferLength();
@@ -339,7 +349,7 @@ char* fdReadLine(int fd) {
 	 *
 	 */
 
-	if (isLocked()) {return NULL;}
+	if (_isLocked(fd)) {return NULL;}
 
 	ssize_t bytesRead;
 
@@ -353,11 +363,11 @@ char* fdReadLine(int fd) {
 	 *
 	 * 					return line
 	 */
-	byteString_t* line=NULL;
+	byteString_t* line=bsInit();
 	byteString_t* leftover=NULL;
 	char* returnLine;
 	int lineLength;
-	int newLineIx=NULL;
+	int newLineIx;
 	char* newLineLocation;
 	int leftoverSize;
 	int readFailCount=0;
@@ -393,6 +403,7 @@ char* fdReadLine(int fd) {
 			_unlock();
 		}
 
+		bsFree(line);
 		line=bsCopy(leftover);
 		bsFree(leftover);
 	}
@@ -412,7 +423,9 @@ char* fdReadLine(int fd) {
 
 		bsAppend(line, buffer, bytesRead);
 
-	} while (newLineLocation== NULL && ((bytesRead==BUFFER)||readFailCount<=READ_REATTEMPT));
+	} while (newLineLocation== NULL && ((bytesRead==BUFFER)
+											||readFailCount<=READ_REATTEMPT
+											||bytesRead==0));
 
 
 	// The fd had repeated read errors.
@@ -447,7 +460,7 @@ void closeSocket(int s) {
 	close(s);
 }
 
-void sendString(int socketFd, char* s, char c) {
+void sendString(int socketFd, char* s, char* c) {
 	/**
 	 * Send a string into the socket.
 	 *
@@ -475,13 +488,14 @@ void _sendByte(int socketFd, char* bytes, int length) {
 	 */
 	int sentCount=0;
 	int sent;
+	int sendLength=length;
 	while (sentCount!=length) {
-		sent = send(socketFd, bytes+sentCount, length, 0);
+		sent = send(socketFd, bytes+sentCount, sendLength, 0);
 		if (sent==-1) {
 			_handleSendError();
 		}
 		sentCount+=sent;
-		length-=sent;
+		sendLength-=sent;
 	}
 }
 
@@ -506,11 +520,11 @@ void _handleSendError(){
 	exit(ESEND);
 }
 
-void sendChar(int socketFd, char s) {
+void sendChar(int socketFd, char* s) {
 	/**
 	 * Send a single character <s> throught <socketFd>
 	 */
-	_sendByte(socketFd, &s, 1);
+	if(s!=NULL){ _sendByte(socketFd, s, 1);}
 }
 
 
@@ -526,15 +540,16 @@ void sendFile(int socketFd, FILE *f) {
 	 * 	f is @ zero offset, or else only part of the file will be sent
 	 */
 	char buffer[SENDBUFFER];
+	size_t nRead;
 
 	/* Send bytes until the EOF is reached */
 	while(feof(f)==0){
 
 		/* Handle file read errors if present */
-		fread(buffer, SENDBUFFER, 1, f);
+		nRead=fread(buffer, SENDBUFFER, 1, f);
 		if (ferror(f)!=0) {
 			handleFileReadError();
 		}
-		_sendByte(socketFd, buffer, SENDBUFFER);
+		_sendByte(socketFd, buffer, nRead);
 	}
 }

@@ -3,3 +3,4 @@
 .settings/
 macro
 macro.c
+*.o

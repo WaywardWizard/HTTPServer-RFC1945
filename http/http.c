@@ -3,10 +3,10 @@
 #include <string.h>
 
 #include "httpStructures.h"
-#include "../utility/tcpSocketIo.h"
-#include "../utility/filesystem.h"
-#include "../utility/logger.h"
-#include "../utility/regexTool.h"
+#include "./../utility/tcpSocketIo.h"
+#include "./../utility/filesystem.h"
+#include "./../utility/logger.h"
+#include "./../utility/regexTool.h"
 #include "http.h"
 
 #define MIME_JS "javascript"
@@ -26,7 +26,7 @@ void _handleInvalidPath();
 int _parseRequestLine(char* requestLine, request_t *r);
 response_t* _getResponse(request_t *r, int socketFd, char* rootPath);
 request_t *_getRequest(int socketFd);
-response_t *_httpGet(request_t *r, char* rootPath);
+void _httpGet(request_t *r, response_t *response, char* rootPath);
 char* _getMimeType(char* fPath);
 char* _compilePathFromURI(char* uri, char* rootPath);
 
@@ -40,6 +40,9 @@ void processRequest(int socketFd, char* rootPath) {
 
 	/* Read request, assemble response */
 	request_t* r=_getRequest(socketFd);
+	if(r==NULL) {
+		mylog("Malformed request");
+	}
 	response_t* rs=_getResponse(r, socketFd, rootPath);
 	freeRequest(r);free(r);
 
@@ -50,26 +53,32 @@ void processRequest(int socketFd, char* rootPath) {
 
 request_t *_getRequest(int socketFd) {
 	/**
-	 * Read a request from a connected socket & return a request structure
+	 * Read a request from <socketFd> & return a request structure
+	 *
+	 * Return null if no request could be read
 	 */
 
 	request_t* r=initRequest();
 	char* requestLine = fdReadLine(socketFd);
 
 	if(requestLine==NULL){
-		handleInvalidRequest();
+		return(NULL);
 	}
 
 	/* Read request line */
-	_parseRequestLine(requestLine, r);
-	free(requestLine);
+	if(_parseRequestLine(requestLine, r)==EINVALID_REQUEST) {
+		free(requestLine);
+		return(NULL);
+	}
 
-	/* Read request header fields */
+	/**TODO: Stop from looping, needs to quit on finding an empty line */
+	/* Read request header fields
 	while((requestLine=fdReadLine(socketFd))!=NULL) {
 
-		/* Not implemented */
+		/* Not implemented
 		_parseRequestHeader(requestLine, r);
 	}
+	*/
 
 	/* Not implemented. Reads content-length bytes from fd */
 	_parseRequestEntity(r, socketFd);
@@ -91,25 +100,27 @@ _getResponse(request_t *r, int socketFd, char* rootPath) {
 	 * 		Only the GET method is supported (for the assignment)
 	 */
 	char *resourcePath=NULL;
-	response_t *rs;
+	response_t *rs=initResponse();
+	rs->httpVersion=strdup(r->httpVersion);
+
+	/* Write verions into response here */
 	if(strcmp(r->method,"GET")==0) {
-		rs = _httpGet(r, rootPath);
+		_httpGet(r, rs, rootPath);
 	}
 	return(rs);
 }
 
 
-response_t*
-_httpGet(request_t *r, char* rootPath) {
+void _httpGet(request_t *request, response_t *response, char* rootPath) {
 
-	response_t* response;
+	request_t*r=request;
 	char* statusCode;
 	char* statusPhrase;
 	char* resourcePath=_compilePathFromURI((r->uri), rootPath);
 	char* contentType;
 
 	/* Check the file exists */
-	if(testFile(resourcePath, F_OK|R_OK)==FALSE) {
+	if(resourcePath==NULL||testFile(resourcePath, F_OK|R_OK)==FALSE) {
 		statusCode = "404";
 		statusPhrase="Not Found";
 
@@ -130,7 +141,6 @@ _httpGet(request_t *r, char* rootPath) {
 
 	response->entityPath=resourcePath;
 
-	return(response);
 }
 
 
@@ -163,6 +173,9 @@ _compilePathFromURI(char* uri, char* rootPath) {
 	 *
 	 * NOTE:
 	 * 		Caller is responsible for freeing the compiled path that is returned
+	 *
+	 * RETURN:
+	 * 	allocated filepath of the uri. Null if cannot extract a valid filepath.
 	 */
 	int rPathLength=strlen(rootPath);
 	char* uriPath;
@@ -170,11 +183,15 @@ _compilePathFromURI(char* uri, char* rootPath) {
 	/* No match found */
 	if(extractMatch(PATH, uri, &uriPath)==NULL) {
 		_handleInvalidPath();
+		return(NULL);
 	}
 
-	char* path = malloc(strlen(rootPath)+strlen(uri));
+	char* path = malloc(strlen(rootPath)+1+strlen(uriPath));
 	strcpy(path, rootPath);
-	strcat(path, uri);
+	strcat(path, "/");
+	strcat(path, uriPath);
+	free(uriPath);
+
 	return(path);
 }
 
@@ -207,6 +224,9 @@ _parseRequestLine(char* requestLine, request_t *r) {
 
 	/* Extract request URI */
 	requestLine = extractMatch(URI_REGEX, requestLine, &(r->uri));
+	if (requestLine==NULL){
+		return(EINVALID_REQUEST);
+	}
 
 	/* Simple http request recieved => version is 0.9 */
 	if(NULL==extractMatch(HTTP_VERSION_REGEX, requestLine, &(r->httpVersion))){
@@ -226,16 +246,16 @@ void _sendResponse(response_t* r, int socketFd) {
 	/* Serialize response structure and pipe it into socketFd */
 
 	/* Status line */
-	sendString(socketFd, r->httpVersion, ' ');
-	sendString(socketFd, r->status->code, ' ');
-	sendString(socketFd, r->status->phrase, '\n');
-	sendChar(socketFd, '\n');
+	sendString(socketFd, r->httpVersion, " ");
+	sendString(socketFd, r->status->code, " ");
+	sendString(socketFd, r->status->phrase, "\n");
 
 	/* Response header */
-	sendString(socketFd, "Content-Type", ':');
-	sendString(socketFd, r->eHeader->contentType, '\n');
+	sendString(socketFd, "Content-Type", ":");
+	sendString(socketFd, r->eHeader->contentType, "\n");
 
 	/* Send Entity */
+	sendChar(socketFd, "\n");
 	FILE *f = fopen(r->entityPath, "r");
 	if(f==NULL){
 		handleFileOpenError();

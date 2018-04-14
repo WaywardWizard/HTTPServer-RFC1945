@@ -5,17 +5,33 @@
  *      Author: ben
  */
 
+#include "regexTool.h"
+#include <regex.h>
+#include <unistd.h>
+#include "logger.h"
+#include "bool.h"
+
 char*
 extractMatch(char* regex, char* searchString, char** destination) {
 	/**
-	 * Search <string> for match with <regex> Write match into match
-	 * destination.
+	 * Search <string> for match with <regex> Write match into <destination>
 	 *
 	 * Terminates if an error occured
+	 *
+	 * ARGUMENT:
+	 * 	destination - this is an allocated pointer addres which will be
+	 * 	allocated, and then the match will be writted into the allocated memory.
+	 * 	The match will be terminated with a null byte.
+	 *
+	 * 	searchString - string to search
+	 * 	regex		 - Posix ERE to match with
 	 *
 	 * RETURN:
 	 * 		NULL if no match.
 	 * 		Else, pointer to remainder of search string.
+	 *
+	 * NOTE:
+	 * 	always uses extended regexes
 	 */
 	regex_t rx;
 	regmatch_t match;
@@ -27,8 +43,7 @@ extractMatch(char* regex, char* searchString, char** destination) {
 	if(error!=0){
 		char errorMessage[errSize];
 		regerror(error,&rx,errorMessage,errSize);
-		mylog("Regex compilation error: \n");
-		mylog("\t");
+		mylog("Regex compilation error");
 		mylog(errorMessage);
 		exit(EREGCOMP);
 	}
@@ -48,4 +63,34 @@ extractMatch(char* regex, char* searchString, char** destination) {
 
 	/* No match found */
 	return(NULL);
+}
+
+int isMatch(char* regex, char* searchString){
+	/**
+	 * Return true/false indicating wether <regex> matches <searchString>
+	 */
+	regex_t rx;
+	regmatch_t match;
+	int errSize=100; // Default error message size
+	int error = regcomp(&rx, regex, REG_EXTENDED);
+	int matchSize;
+
+	/* Check compilation sucessful */
+	if(error!=0){
+		char errorMessage[errSize];
+		regerror(error,&rx,errorMessage,errSize);
+		mylog("Regex compilation error");
+		mylog(errorMessage);
+		exit(EREGCOMP);
+	}
+
+	/* Match */
+	error = regexec(&rx,searchString, 1, &match, 0);
+	regfree(&rx);
+
+	/* Return indicating if a match was found */
+	if(error!=REG_NOMATCH){
+		return true;
+	}
+	return false;
 }

@@ -8,6 +8,8 @@
 #ifndef UTILITY_REGEXTOOL_H_
 #define UTILITY_REGEXTOOL_H_
 
+#define EREGCOMP 889
+
 char* extractMatch(char* regex, char* searchString, char** destination);
 int isMatch(char* regex, char* searchString);
 

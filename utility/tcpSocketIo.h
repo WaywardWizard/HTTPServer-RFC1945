@@ -22,9 +22,9 @@ byteString_t *fdReadBytes(int fd, int byteCount); // read set amt of bytes
 void flushFdBuffer();				// Unlock module for use with other fd's
 void closeSocket(int s);
 
-void sendString(int socketFd, char* s, char* c);
-void sendChar(int socketFd, char* s);
-void sendFile(int socketFd, FILE *f);
+int sendString(int socketFd, char* s, char* c);
+int sendChar(int socketFd, char* s);
+int sendFile(int socketFd, FILE *f, long fSize);
 
 
 #define EBINDFAILED	  7
@@ -32,5 +32,6 @@ void sendFile(int socketFd, FILE *f);
 #define ELISTEN		  11
 #define EREADDEFICIT	  99 // fd did not have as many bytes as requested
 #define ESEND 		  101
+#define SENDOK		  842972
 
 #endif

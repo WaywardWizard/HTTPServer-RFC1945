@@ -20,17 +20,18 @@
 #define MATCH_MIME_JPEG "\\.jpg$"
 
 #define EINVALID_REQUEST 19 // Request was malformed
+#define REQUESTOK 23 // Request line is valid
 
 void _handleInvalidPath();
 
 int _parseRequestLine(char* requestLine, request_t *r);
-response_t* _getResponse(request_t *r, int socketFd, char* rootPath);
+response_t* _getResponse(request_t *r, char* rootPath);
 request_t *_getRequest(int socketFd);
 void _httpGet(request_t *r, response_t *response, char* rootPath);
 char* _getMimeType(char* fPath);
-char* _compilePathFromURI(char* uri, char* rootPath);
+char* _assemblePathFromURI(char* uri, char* rootPath);
+char* _longToString(long l);
 
-void _notifyInvalidRequest();
 void _parseRequestHeader(char* headerLine, request_t *r);
 void _parseRequestEntity(request_t* r, int socketFd);
 void _sendResponse(response_t* r, int socketFd);
@@ -53,7 +54,7 @@ void processRequest(int socketFd, char* rootPath) {
 		return;
 	}
 
-	response_t* rs=_getResponse(r, socketFd, rootPath);
+	response_t* rs=_getResponse(r, rootPath);
 	freeRequest(r);free(r);
 
 	/* Send the response.*/
@@ -97,15 +98,14 @@ request_t *_getRequest(int socketFd) {
 
 
 response_t*
-_getResponse(request_t *r, int socketFd, char* rootPath) {
+_getResponse(request_t *r, char* rootPath) {
 	/**
-	 * Reply to a parsed request, via socketFd
+	 * Populate a response structure for a request.
 	 *
 	 * ARGUMENT:
 	 * 		request_t r - The request. Should be parsed/populated with ateast
 	 * 		a request line
-	 *
-	 * 		socketFd - file descriptor for open socket
+	 * 		rootPath - path to the document root
 	 *
 	 * RETURN:
 	 * 		response_t *r - response structure representing server response.
@@ -116,11 +116,25 @@ _getResponse(request_t *r, int socketFd, char* rootPath) {
 	 */
 
 	response_t *rs=initResponse();
-	rs->httpVersion=strdup(r->httpVersion);
+
+	/* This server is HTTP/1.0 - this will be implicitly overriden if sending a
+	 * simple response (HTTP/0.9) by not specifying a version */
+	rs->httpVersion=strdup("HTTP/1.0");
 
 	/* Write verions into response here */
 	if(strcmp(r->method,"GET")==0) {
 		_httpGet(r, rs, rootPath);
+	}
+
+	/* Find content length of entity if present */
+	if (rs->entityPath!=NULL) {
+		FILE *f = fopen(rs->entityPath, "rb");
+		if(f==NULL){
+			handleFileOpenError();
+		}
+		long fSize = getBinaryFileSize(f);
+		rs->eHeader->contentLength=fSize;
+		fclose(f);
 	}
 
 	return(rs);
@@ -144,10 +158,10 @@ void _httpGet(request_t *request, response_t *response, char* rootPath) {
 	request_t*r=request;
 	char* statusCode;
 	char* statusPhrase;
-	char* resourcePath=_compilePathFromURI((r->uri), rootPath);
+	char* resourcePath=_assemblePathFromURI((r->uri), rootPath);
 	char* contentType;
 
-	/* Check the file exists */
+	/* Check the file exists & set response status*/
 	if(resourcePath==NULL||testFile(resourcePath, F_OK|R_OK)==FALSE) {
 		statusCode = "404";
 		statusPhrase="Not Found";
@@ -173,14 +187,14 @@ char* _getMimeType(char* fPath) {
 	 */
 	if (isMatch(""MATCH_MIME_JS, fPath)) {
 		return(MIME_JS);
-	} else if (isMatch(""MATCH_MIME_HTML, fPath)) {
+	} else if (isMatch(MATCH_MIME_HTML, fPath)) {
 		return(MIME_HTML);
-	} else if (isMatch(""MATCH_MIME_JPEG, fPath)) {
+	} else if (isMatch(MATCH_MIME_JPEG, fPath)) {
 		return(MIME_JPEG);
-	} else if (isMatch(""MATCH_MIME_CSS, fPath)) {
+	} else if (isMatch(MATCH_MIME_CSS, fPath)) {
 		return(MIME_CSS);
 	}
-	return(""MIME_DEFAULT);
+	return(MIME_DEFAULT);
 }
 
 
@@ -189,7 +203,7 @@ _parseRequestHeader(char* headerLine, request_t *r) {return;}
 
 
 char*
-_compilePathFromURI(char* uri, char* rootPath) {
+_assemblePathFromURI(char* uri, char* rootPath) {
 	/**
 	 * Given a URI and server root path, resolve to an absolute path
 	 * Remove query and params part of the URI if any
@@ -204,12 +218,13 @@ _compilePathFromURI(char* uri, char* rootPath) {
 	int rPathLength=strlen(rootPath);
 	char* uriPath;
 
-	/* No match found */
+	/* No match found - return null */
 	if(extractMatch(PATH, uri, &uriPath)==NULL) {
 		_handleInvalidPath();
 		return(NULL);
 	}
 
+	/* Assemble path */
 	char* path = malloc(strlen(rootPath)+1+strlen(uriPath));
 	strcpy(path, rootPath);
 	strcat(path, "/");
@@ -223,14 +238,6 @@ _compilePathFromURI(char* uri, char* rootPath) {
 void
 _handleInvalidPath() {
 	mylog("Could not extract a path from the given uri");
-	exit(1);
-}
-
-
-void
-_notifyInvalidRequest() {
-	mylog("Request invalid.");
-	exit(1);
 }
 
 
@@ -239,6 +246,8 @@ _parseRequestLine(char* requestLine, request_t *r) {
 	/**
 	 * Load http request line into request structure. If the request is
 	 * malformed, return EINVALID_REQUEST and write null bytes into request struct
+	 *
+	 * Otherwise if the request was valid return REQUESTOK
 	 */
 
 	/* Extract method */
@@ -253,18 +262,30 @@ _parseRequestLine(char* requestLine, request_t *r) {
 		return(EINVALID_REQUEST);
 	}
 
-	/* Simple http request recieved => version is 0.9 */
+	/* Simple http request recieved => version is 0.9, otherwise as per request*/
 	if(NULL==extractMatch(HTTP_VERSION_REGEX, requestLine, &(r->httpVersion))){
 		char* version = "HTTP/0.9";
 		r->httpVersion = malloc(strlen(version));
 		strcpy(r->httpVersion, version);
 	}
-
-	return(0);
+	return(REQUESTOK);
 }
 
 
 void _parseRequestEntity(request_t* r, int socketFd){}
+
+
+char* _longToString(long l) {
+	/* Return a string representation of a given long. The return value will
+	 * need to be freed by the caller
+	 */
+
+	/* Get the length of the resulting string */
+	int len = 1+snprintf(NULL,0,"%ld", l);
+	char* str=malloc(len);
+	snprintf(str, len, "%ld", l);
+	return(str);
+}
 
 
 void _sendResponse(response_t* r, int socketFd) {
@@ -272,26 +293,43 @@ void _sendResponse(response_t* r, int socketFd) {
 
 	/* Send a simple request (only the entity) if http0.9 */
 	if(strcmp(r->httpVersion, "HTTP/0.9")!=0) {
+
 		/* Status line */
 		sendString(socketFd, r->httpVersion, " ");
 		sendString(socketFd, r->status->code, " ");
 		sendString(socketFd, r->status->phrase, "\n");
 
+
 		/* Send headers for entity if entity exists */
-		if (strcmp(r->status->code, "404")!=0) {
+		if (strcmp(r->status->code, "200")==0) {
+
 			sendString(socketFd, "Content-Type:", " ");
 			sendString(socketFd, r->eHeader->contentType, "\n");
-			sendChar(socketFd, "\n");
 		}
 	}
 
 	/* Send Entity if exists*/
 	if (r->entityPath!=NULL) {
+
+		/* Content length header line */
+		sendString(socketFd, "Content-Length: ", NULL);
+		char* contentLength=_longToString(r->eHeader->contentLength);
+		sendString(socketFd, contentLength, "\n");
+
+		/* Line feed between header and entity */
+		sendChar(socketFd, "\n");
+
+		/* Send the binary file as a stream */
 		FILE *f = fopen(r->entityPath, "rb");
 		if(f==NULL){
 			handleFileOpenError();
 		}
-		sendFile(socketFd, f);
+		sendFile(socketFd, f, r->eHeader->contentLength);
 		fclose(f);
+
+	/* Trailing carriage return */
+	} else {
+		sendChar(socketFd, "\n");
 	}
 }
+

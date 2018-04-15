@@ -31,7 +31,7 @@ struct requestHeader { // Request header fields
 struct entityHeader { // Entity header fields
 	char* allow;
 	char* contentEncoding;
-	char* contentLength;
+	long contentLength;
 	char* contentType;
 	char* expires;
 	char* lastModified;

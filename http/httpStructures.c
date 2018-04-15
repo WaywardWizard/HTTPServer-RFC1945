@@ -109,7 +109,7 @@ _initEHeader() {
 	eHeader_t* h=malloc(sizeof(eHeader_t));
 	h->allow=NULL;
 	h->contentEncoding=NULL;
-	h->contentLength=NULL;
+	h->contentLength=0;
 	h->contentType=NULL;
 	h->expires=NULL;
 	h->lastModified=NULL;
@@ -119,7 +119,6 @@ _initEHeader() {
 void _freeEHeader(eHeader_t* h) {
 	free(h->allow);
 	free(h->contentEncoding);
-	free(h->contentLength);
 	free(h->contentType);
 	free(h->expires);
 	free(h->lastModified);

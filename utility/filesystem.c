@@ -17,6 +17,8 @@ int testFile(char* path, int tests) {
 	 * NOTE:
 	 *	 Requires #include <unistd.h>
 	 */
+	mylog("Checking access for path: ");
+	mylog(path);
 	int e = access(path, tests);
 	if(e==0){
 		return(true);

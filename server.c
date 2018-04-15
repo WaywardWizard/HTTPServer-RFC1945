@@ -41,15 +41,13 @@
  *
  */
 
-#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-/*#include <regex.h>*/
 #include <errno.h>
+#include <sys/socket.h>
 #include <pthread.h> /* -l pthread when compiling */
 #include <semaphore.h>
-#include <sys/socket.h>
 
 
 #include "utility/bool.h"
@@ -102,13 +100,15 @@ main(int argc, char* argv[]){
 
 	sem_init(&threadQuota, SEMAPHORE_SHARE_THREADS, MAXTHREAD);
 
-	char* serverRoot = argv[2];
+	/* Check server root valid, remove any trailing slash */
+	char* serverRoot = strdup(argv[2]);
 	stripTrailingSlash(&serverRoot);
 	validateServerRoot(serverRoot);
 
 	int port = atoi(argv[1]);
 	validatePort(port);
 
+	mylog("Deploying concierge");
 	deployConcierge(port, serverRoot);
 }
 
@@ -141,21 +141,17 @@ deployConcierge(int port, char* serverRoot){
 	int workSocket;
 	pthread_t thread;
 
-
-	/* create the thread */
-
-
 	/* Recieve requests and hand them off to worker threads */
 	while(true) {
 
 		/* Accept connection */
-		workSocket = accept(socketFd,NULL, NULL);
+		workSocket = accept(socketFd, NULL, NULL);
 		dsPair_t* d=initDsPair(workSocket, serverRoot);
 
-		/* Block until there are we are below the thread limit */
+		/* Block until there are we are below the thread limit*/
 		waitForThreadAvailable();
 
-		/* The thread cleanup handler will close the socket */
+		/* The thread cleanup handler will close the socket & free the dsPair*/
 		pthread_create(&thread, NULL, threadProcessRequest, (void*)d);
 	}
 
@@ -170,13 +166,21 @@ void waitForThreadAvailable() {
 
 void* threadProcessRequest(void* dsPair) {
 	/**
-	 * Handle a single http request.
+	 * Handle a single http request as a separate thread.
+	 *
+	 * ARGUMENT:
+	 *  dsPair_t dsPair - Socket and path to root directory. The socket shall
+	 *  be closed before the thread exits, and all of the memory allocated to
+	 *  dsPair freed
+	 *
+	 * RETURN:
+	 * 	Process request
 	 */
 
+	/* Unpack arguments, to be freed when cleaning up */
 	dsPair_t* pathSocket=(dsPair_t*)dsPair;
 	int socketFd=pathSocket->socket;
 	char* docRoot=pathSocket->docroot;
-
 
 	/* Process & reply to http request */
 	processRequest(socketFd, docRoot);
@@ -186,11 +190,10 @@ void* threadProcessRequest(void* dsPair) {
 	free(dsPair);
 	closeSocket(socketFd);
 
-	/* Increment the available thread number*/
+	/* Increment the available number of threads*/
 	sem_post(&threadQuota);
 	pthread_exit(NULL);
 }
-
 
 void validatePort(int port) {
 	/**

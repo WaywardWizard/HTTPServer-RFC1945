@@ -35,4 +35,4 @@ regexTool.o: utility/regexTool.c utility/regexTool.h
 	
 clean:
 	rm server.o logger.o tcpSocketIo.o httpStructures.o \
-	http.o byteString.o regexTool.o filesystem.o
+	http.o byteString.o regexTool.o filesystem.o server

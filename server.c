@@ -3,42 +3,17 @@
  * Student Nbr:		834198
  * Date:			Apr 2018
  *
- * This program aims to implement an HTTP1.0 server as defined by RFC1945
+ * This program implements a HTTP1.0 server as per RFC1945
  *
- * Requirements
- * 	GET request response
- * 	Valid response
- * 	.html, .jpg, .css, .js
- * 	Multiple requests with pthread
+ * Supports;
+ * 	-> GET request response (404 | 200)
+ * 	-> .html, .jpg, .css, .js (mime types)
+ * 	-> Multiple requests with pthread
  *
  * 	args:
  * 		./server port rootpath
  * 		path to root web
  * 		port
- *
- * 	response:
- *	 	200, 404 response
- *	 	http status
- *	 	content type
- *
- * 	preliminary understanding:
- *
- * 	shuttle
- * 		make socket.
- * 		bind to a port.
- * 		listen on socket.
- * 		recieve request
- * 		negotiate new socket.
- * 		hand off to resource retrieval
- *
- * 	fetcher
- * 		negotiate socket
- * 		recieve http request
- * 		fetch resource
- * 		send response
- *
- *
- *
  */
 
 #include <stdio.h>
@@ -74,7 +49,7 @@ void validatePort(int port);
 void validateServerRoot(char* serverRoot);
 void stripTrailingSlash(char** path);
 void stripTrailingChar(char** path,char c);
-dsPair_t* initDsPair(int socket, char* dRoot);
+dsPair_t* initDsPair(int socket, char* dRoot); // socket/rootPath pair
 void freeDsPair(dsPair_t* d);
 void waitForThreadAvailable();
 void* threadProcessRequest(void* dsPair);
@@ -131,7 +106,7 @@ stripTrailingChar(char** path,char c) {
 void
 deployConcierge(int port, char* serverRoot){
 	/**
-	 * Deploy concierge to hand off all incoming connections.
+	 * Deploy concierge to hand off all incoming connections to worker threads.
 	 *
 	 * RETURN:
 	 * 		integer file descriptor for soc
@@ -141,7 +116,7 @@ deployConcierge(int port, char* serverRoot){
 	int workSocket;
 	pthread_t thread;
 
-	/* Recieve requests and hand them off to worker threads */
+	/* Recieve requests and hand them off to worker threads. */
 	while(true) {
 
 		/* Accept connection */

@@ -16,6 +16,7 @@
 
 
 int testFile(char* path, int tests);
+long getBinaryFileSize(FILE *f);
 void handleFileOpenError();
 void handleFileReadError();
 

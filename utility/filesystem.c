@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <stdio.h>
 #include "filesystem.h"
 #include "logger.h"
 
@@ -39,6 +40,17 @@ int testFile(char* path, int tests) {
 		return(FALSE);
 	}
 	return(false);
+}
+
+long getBinaryFileSize(FILE *f) {
+	/**
+	 * Get the size of a binary file. Move the internal pointer to the beginning
+	 * of the file.
+	 */
+	fseek(f, 0, SEEK_END);
+	long size=ftell(f);
+	rewind(f);
+	return(size);
 }
 
 void handleFileOpenError() {

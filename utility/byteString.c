@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+
 byteString_t *bsInit() {
 	byteString_t *b=malloc(sizeof(byteString_t));
 	b->string=NULL;
@@ -15,12 +16,14 @@ byteString_t *bsInit() {
 	return(b);
 }
 
+
 void bsWrite(byteString_t *b, void* byteChain, int length) {
 	free(b->string);
 	b->string=malloc(length);
 	bcopy(byteChain, b->string, length);
 	b->length=length;
 }
+
 
 void bsAppend(byteString_t *b, void* byteChain, int length) {
 	if(b==NULL) {return;}
@@ -30,17 +33,20 @@ void bsAppend(byteString_t *b, void* byteChain, int length) {
 	b->length=newLength;
 }
 
+
 void bsFree(byteString_t *b) {
 	if(b!=NULL){
 		free(b->string);
 	}
 }
 
+
 byteString_t *bsCopy(byteString_t *b) {
 	byteString_t *b2=bsInit();
 	bsWrite(b2, b->string, b->length);
 	return(b2);
 }
+
 
 void bsShrink(byteString_t *b, int size) {
 	if(b==NULL || size>(b->length)) {
@@ -49,6 +55,7 @@ void bsShrink(byteString_t *b, int size) {
 	b->string=realloc(b->string, size);
 	b->length=size;
 }
+
 
 void bsDestruct(void* b) {
 	byteString_t* bs=b;

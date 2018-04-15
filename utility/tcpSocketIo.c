@@ -36,6 +36,7 @@ int _setFdBuffer(char* string, int len);
 void _unsetFdBuffer();
 void _sendByte(int socketFd, char* bytes, int length);
 void _sliceByteStringCacheLeftover(byteString_t *b, int sliceIndex);
+long _getBinaryFileSize(FILE *f);
 
 void _handleSendError();
 
@@ -132,15 +133,16 @@ int _setFdBuffer(char*  byteString, int len) {
 	 * 		Set bytestring to NULL if zero length. Else creare bytestring_t
 	 *
 	 */
-	byteString_t *b;
+	byteString_t *fdBuffer=bsInit();
 	if (len>0) {
-		b=malloc(sizeof(byteString_t));
-		bsWrite(b, byteString, len);
+		bsWrite(fdBuffer, byteString, len);
 	} else {
-		b=NULL;
+		fdBuffer=NULL;
 	}
+
+	/* Free the old fdBuffer & set the new one */
 	bsFree(_getFdBuffer());
-	return(pthread_setspecific(tBuf, (void*)b));
+	return(pthread_setspecific(tBuf, (void*)fdBuffer));
 }
 
 void _unsetFdBuffer() {
@@ -306,7 +308,7 @@ void _sliceByteStringCacheLeftover(byteString_t *b, int sliceIndex) {
 	char* byteString=b->string;
 	int leftoverLen=byteStringLength-sliceLen;
 	if (leftoverLen!=0) {
-		_setFdBuffer((&byteString)[sliceIndex], leftoverLen);
+		_setFdBuffer(byteString+sliceIndex, leftoverLen);
 	}
 
 	/* Shrink byteString to slice size */
@@ -527,6 +529,17 @@ void sendChar(int socketFd, char* s) {
 	if(s!=NULL){ _sendByte(socketFd, s, 1);}
 }
 
+long _getBinaryFileSize(FILE *f) {
+	/**
+	 * Get the size of a binary file. Move the internal pointer to the beginning
+	 * of the file.
+	 */
+	fseek(f, 0, SEEK_END);
+	long size=ftell(f);
+	rewind(f);
+	return(size);
+}
+
 
 void sendFile(int socketFd, FILE *f) {
 	/**
@@ -541,8 +554,9 @@ void sendFile(int socketFd, FILE *f) {
 	 */
 	char buffer[SENDBUFFER];
 	size_t nRead;
+	long fSize=_getBinaryFileSize(f);
 
-	/* Send bytes until the EOF is reached */
+	/* Send groups of bytes until the EOF is reached */
 	while(feof(f)==0){
 
 		/* Handle file read errors if present */
@@ -550,6 +564,11 @@ void sendFile(int socketFd, FILE *f) {
 		if (ferror(f)!=0) {
 			handleFileReadError();
 		}
-		_sendByte(socketFd, buffer, nRead);
+		_sendByte(socketFd, buffer, nRead*SENDBUFFER);
+		fSize-=(nRead*SENDBUFFER);
 	}
+
+	/* Send remainder of file */
+	_sendByte(socketFd, buffer, fSize);
 }
+

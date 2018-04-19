@@ -1,3 +1,10 @@
+/*
+ * Author: 			Ben Tomlin
+ * Student Id:		btomlin
+ * Student Nbr:		834198
+ * Date:			Apr 2018
+ */
+
 #ifndef SERVER_H_
 #define SERVER_H_
 

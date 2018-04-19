@@ -1,8 +1,8 @@
 /*
- * byteString.h
- *
- *  Created on: 12 Apr. 2018
- *      Author: ben
+ * Author: 			Ben Tomlin
+ * Student Id:		btomlin
+ * Student Nbr:		834198
+ * Date:			Apr 2018
  */
 
 #ifndef UTILITY_BYTESTRING_H_

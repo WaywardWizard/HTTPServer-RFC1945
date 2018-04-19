@@ -1,9 +1,10 @@
 /*
- * byteString.c
- *
- *  Created on: 12 Apr. 2018
- *      Author: ben
+ * Author: 			Ben Tomlin
+ * Student Id:		btomlin
+ * Student Nbr:		834198
+ * Date:			Apr 2018
  */
+
 #include "byteString.h"
 #include <string.h>
 #include <stdlib.h>

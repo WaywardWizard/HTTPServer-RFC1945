@@ -1,3 +1,9 @@
+#\
+ Author: 			Ben Tomlin \
+ Student Id:		btomlin \
+ Student Nbr:		834198 \
+ Date:			Apr 2018 \
+
 CC			= gcc
 CFLAG		= -l pthread -g
 EXE			= server
@@ -8,7 +14,7 @@ all: server
 
 $(EXE): $(LINK_OBJECT) utility/bool.h
 	$(CC) $(CFLAG) -o server $(LINK_OBJECT)
-	
+
 logger.o: utility/logger.c utility/logger.h
 	$(CC) $(CFLAG) -c utility/logger.c
 

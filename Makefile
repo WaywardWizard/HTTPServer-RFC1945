@@ -5,7 +5,8 @@
  Date:			Apr 2018 \
 
 CC			= gcc
-CFLAG		= -l pthread -g
+CFLAG		=
+CFLAGTRAIL	= -lpthread
 EXE			= server
 LINK_OBJECT = server.o logger.o http.o httpStructures.o \
 				tcpSocketIo.o byteString.o filesystem.o regexTool.o
@@ -13,8 +14,8 @@ LINK_OBJECT = server.o logger.o http.o httpStructures.o \
 all: server
 
 $(EXE): $(LINK_OBJECT) utility/bool.h
-	$(CC) $(CFLAG) -o server $(LINK_OBJECT)
-
+	$(CC) $(CFLAG) -o server $(LINK_OBJECT) $(CFLAGTRAIL)
+	
 logger.o: utility/logger.c utility/logger.h
 	$(CC) $(CFLAG) -c utility/logger.c
 
@@ -28,7 +29,7 @@ httpStructures.o: http/httpStructures.c http/httpStructures.h
 	$(CC) $(CFLAG) -c http/httpStructures.c
 	
 tcpSocketIo.o: utility/tcpSocketIo.c utility/tcpSocketIo.h
-	$(CC) $(CFLAG) -c utility/tcpSocketIo.c
+	$(CC) $(CFLAG) -c utility/tcpSocketIo.c $(CFLAGTRAIL)
 	
 byteString.o: utility/byteString.c utility/byteString.h
 	$(CC) $(CFLAG) -c utility/byteString.c

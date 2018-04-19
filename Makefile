@@ -1,5 +1,5 @@
 CC			= gcc
-CFLAG		= -g
+CFLAG		=
 CFLAGTRAIL	= -lpthread
 EXE			= server
 LINK_OBJECT = server.o logger.o http.o httpStructures.o \

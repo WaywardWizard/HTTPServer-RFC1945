@@ -1,5 +1,6 @@
 /* HTTP1.0 Server
  * Author: 			Ben Tomlin
+ * Student Id:		btomlin
  * Student Nbr:		834198
  * Date:			Apr 2018
  *

@@ -1,3 +1,10 @@
+/*
+ * Author: 			Ben Tomlin
+ * Student Id:		btomlin
+ * Student Nbr:		834198
+ * Date:			Apr 2018
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

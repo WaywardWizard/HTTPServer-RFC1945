@@ -1,1 +1,4 @@
-I had to put the -lpthread argument to gcc last for it to work on nectar (but it worked as the first arg on my machine)
+#HTTP Server
+Supports 0.9 & 1.0 GET requests, 404|200 responses and mime types of {js, html, css, jpeg}
+
+Demonstrates threading, makefiles, data structures, c competency
